@@ -1,0 +1,297 @@
+//Slim script to run a single chromosomal region, with a single balanced polymorphism inserted before the end of the burnin period.
+//The balanced polymorphism is given 4N gens to establish. If it fails to, the simulation returns to its prior state and goes again. 
+//Demographic changes are exponential.
+//Output is 50 columns - Number of polymorphisms in each MAF category from 0.01 to 0.49
+//This script can be run multiple times, with each run appending a line to each results file
+//These results can then be concatenated (eg with numsum)
+//How to run:
+//slim -d d_scaling_factor=10 -d d_regionLength=1000 -d d_Nanc=10000 -d d_Ncurr=5000 -d "d_model='vicariance'" -d d_rr=1e-8 -d d_mu=1e-8 -d d_migration_rate=0 -d d_expansion_rate=0 -d d_gamma_shape=0.23 -d d_gamma_mean=1120 -d "d_folder='\\wsl$\Ubuntu\home\viv\vos_reviewerSims'" simple_demography_bs.slim
+
+initialize() {
+
+	defineConstant("scale", d_scaling_factor);
+	//Size of daughter population (for vicariance model second daughter population will be size Nanc-Ncurr)
+	defineConstant("Ncurr", asInteger(round(d_Ncurr/scale)));
+	//Size of ancestral population
+	defineConstant("Nanc", asInteger(round(d_Nanc/scale)));
+	//Recombination rate
+	defineConstant("r", d_rr * 1e-8 * scale);
+	//Mutation rate
+	defineConstant("m", d_mu * scale);
+	//Size of simulated region
+	defineConstant("end", d_regionLength-1);
+	//Ouput folder
+	defineConstant("fn", d_folder);
+	//balanced polymorphism is added at 16N gens
+	defineConstant("gen_balanced", 16 * Nanc);
+	//Burnin is 20N gens
+	defineConstant("gen_burnin", 20 * Nanc);
+	//Simulation runs until 24N gens
+	defineConstant("gen_stop", 24 * Nanc);
+	//Gamma parameters for DFE
+	defineConstant("gamma_shape", d_gamma_shape);
+	defineConstant("gamma_mean", (d_gamma_mean/Nanc) * -1);
+	//Migration parameter (if no migration d_migration=="None")
+	defineConstant("mig", d_migration_rate);
+	//Exponential growth parameter (if no expansion d_expansion=="None")
+	defineConstant("expansion_rate", d_expansion_rate);
+	//Model (vicariance or dispersal)
+	defineConstant("model", d_model);
+	//Draw balanced polymorphism equilibrium frequency from a uniform distribution
+	defineConstant("ef", runif(1, min=1, max=2));	
+	
+	initializeMutationRate(m);
+	
+	initializeMutationType("m1", 0.5, "f", 0.0); // neutral (S)
+	initializeMutationType("m2", 0.5, "g", gamma_mean, gamma_shape); // sdm (NS)
+	initializeMutationType("m3", 0.5, "f", 0.1); // balanced
+
+	initializeGenomicElementType("g1", c(m1,m2), c(0.3,0.7));
+	
+	initializeGenomicElement(g1, 0, end);
+	
+	initializeRecombinationRate(r);
+	
+}
+
+1 { 
+	defineConstant("simID", getSeed());
+	sim.addSubpop("p1", Nanc);
+	//Set variables for adding balanced polymoprhism, gen_burnin and gen_stop
+	sim.rescheduleScriptBlock(s1, start=gen_balanced, end=gen_balanced);
+	sim.rescheduleScriptBlock(s2, start=gen_balanced, end=gen_burnin);
+	sim.rescheduleScriptBlock(s3, start=gen_burnin, end=gen_burnin);
+	sim.rescheduleScriptBlock(s4, start=gen_burnin, end=gen_stop);
+	sim.rescheduleScriptBlock(s5, start=gen_stop, end=gen_stop);
+}
+
+s1 {
+	// save the state of the simulation
+	sim.outputFull("/tmp/slim_" + simID + ".txt");
+	
+	// introduce balanced polymorphism
+	target = sample(p1.genomes, 1);
+	target.addNewDrawnMutation(m3, asInteger(round(end/2)));
+}
+
+s2{
+	mut = sim.mutationsOfType(m3);
+	
+	if (size(mut) == 1)
+	
+	{
+		if (sim.mutationFrequencies(NULL, mut) > 0.1)
+		{
+			sim.deregisterScriptBlock(self);
+		}
+	}
+	
+	else
+	{
+		
+		// go back to generation where sim was last saved
+		sim.readFromPopulationFile("/tmp/slim_" + simID + ".txt");
+		
+		// start a newly seeded run by incrementing the previous seed
+		setSeed(getSeed() + 1);
+		
+		// re-introduce the sweep mutation
+		target = sample(p1.genomes, 1);
+		target.addNewDrawnMutation(m3, pos);
+	}
+
+
+}
+
+fitness(m3) { return ef - sim.mutationFrequencies(subpop, mut);}
+
+//Split pop after 20N
+s3 late() {
+	//If vicariance model, split into two daughter pops, and remove ancestral pop
+	if(model=="vicariance")
+	{
+	sim.addSubpopSplit("p2", Ncurr, p1);
+	sim.addSubpopSplit("p3", Nanc-Ncurr, p1);
+	p1.setSubpopulationSize(0);
+		//Add migration if migration parameter != None
+		if(mig!=0)
+		{
+			p2.setMigrationRates(p2, mig);
+			p3.setMigrationRates(p3, mig);
+		}
+	}
+	//If dispersal model, create single daughter population
+	else
+	{
+	sim.addSubpopSplit("p2", Ncurr, p1);
+		if(mig!='None')
+		{
+			p2.setMigrationRates(p1, mig);
+			p3.setMigrationRates(p2, mig);
+		}
+	}	
+}
+
+
+////Run for 4N more gens
+s4 late() {
+	//Add expansion if relevant. P2 expands in both vicariance and dispersal scenarios
+	if (expansion_rate!=0)
+		{
+		newSize = asInteger( p2.individualCount * expansion_rate); 
+ 		p2.setSubpopulationSize(newSize);
+		}
+	
+	//Sample every 20 generations
+	if(((sim.generation-gen_burnin)/20)%1 == 0)
+		{
+		if (model=="vicariance")
+			{				
+			//get m1 muts
+			m1muts = sim.mutationsOfType(m1);
+			//get counts of m1 in pops
+			m1_in_p1 = (sim.mutationCounts(p2, m1muts) > 0);
+			m1_in_p2 = (sim.mutationCounts(p3, m1muts) > 0);
+			//get freqs of m1 in pops
+			p1_freqs = sim.mutationFrequencies(p2, m1muts);
+			p2_freqs = sim.mutationFrequencies(p3, m1muts);
+			
+			//get m2 muts
+			m2muts = sim.mutationsOfType(m2);
+			//get counts of m2 in pops
+			m2_in_p1 = (sim.mutationCounts(p2, m2muts) > 0);
+			m2_in_p2 = (sim.mutationCounts(p3, m2muts) > 0);
+			//get freqs of m2 in pops
+			p1_freqs = sim.mutationFrequencies(p2, m2muts);
+			p2_freqs = sim.mutationFrequencies(p3, m2muts);
+			
+			//get m3 muts
+			m3muts = sim.mutationsOfType(m3);
+			//get counts of m2 in pops
+			m3_in_p1 = (sim.mutationCounts(p2, m3muts) > 0);
+			m3_in_p2 = (sim.mutationCounts(p3, m3muts) > 0);
+			//get freqs of m2 in pops
+			p1_freqs = sim.mutationFrequencies(p2, m3muts);
+			p2_freqs = sim.mutationFrequencies(p3, m3muts);
+			}
+		
+		else
+			{		
+		
+			//get m1 muts
+			m1muts = sim.mutationsOfType(m1);
+			//get counts of m1 in pops
+			m1_in_p1 = (sim.mutationCounts(p1, m1muts) > 0);
+			m1_in_p2 = (sim.mutationCounts(p2, m1muts) > 0);
+			//get freqs of m1 in pops
+			p1_freqs = sim.mutationFrequencies(p1, m1muts);
+			p2_freqs = sim.mutationFrequencies(p2, m1muts);
+			
+			//get m2 muts
+			m2muts = sim.mutationsOfType(m2);
+			//get counts of m2 in pops
+			m2_in_p1 = (sim.mutationCounts(p1, m2muts) > 0);
+			m2_in_p2 = (sim.mutationCounts(p2, m2muts) > 0);
+			//get freqs of m2 in pops
+			p1_freqs = sim.mutationFrequencies(p1, m2muts);
+			p2_freqs = sim.mutationFrequencies(p2, m2muts);
+			
+			//get m3 muts
+			m3muts = sim.mutationsOfType(m3);
+			//get counts of m2 in pops
+			m3_in_p1 = (sim.mutationCounts(p1, m3muts) > 0);
+			m3_in_p2 = (sim.mutationCounts(p2, m3muts) > 0);
+			//get freqs of m2 in pops
+			p1_freqs = sim.mutationFrequencies(p1, m3muts);
+			p2_freqs = sim.mutationFrequencies(p2, m3muts);
+			}
+		
+		
+		//convert AFs to MAFs
+		p1_m1 = ifelse(p1_freqs>0.5, 1-p1_freqs, p1_freqs);
+		p2_m1 = ifelse(p2_freqs>0.5, 1-p2_freqs, p2_freqs);
+		//get private MAFs
+		p1m1 = p1_m1[(p1_m1 > 0 & p1_m1 < 1) & (p2_m1 == 1 | p2_m1 == 0)];
+		p2m1 = p2_m1[(p2_m1 > 0 & p2_m1 < 1) & (p1_m1 == 1 | p1_m1 == 0)];	
+		
+
+		//convert AFs to MAFs
+		p1_m2 = ifelse(p1_freqs>0.5, 1-p1_freqs, p1_freqs);
+		p2_m2 = ifelse(p2_freqs>0.5, 1-p2_freqs, p2_freqs);
+		//get private MAFs
+		p1m2 = p1_m2[(p1_m2 > 0 & p1_m2 < 1) & (p2_m2 == 1 | p2_m2 == 0)];
+		p2m2 = p2_m2[(p2_m2 > 0 & p2_m2 < 1) & (p1_m2 == 1 | p1_m2 == 0)];
+		
+		//convert AFs to MAFs
+		p1_m3 = ifelse(p1_freqs>0.5, 1-p1_freqs, p1_freqs);
+		p2_m3 = ifelse(p2_freqs>0.5, 1-p2_freqs, p2_freqs);
+		//get private MAFs
+		p1m3 = p1_m3[(p1_m3 > 0 & p1_m3 < 1) & (p2_m3 == 1 | p2_m3 == 0)];
+		p2m3 = p2_m3[(p2_m3 > 0 & p2_m3 < 1) & (p1_m3 == 1 | p1_m3 == 0)];
+		
+		
+		//get shared MAFs
+		p1m2s = p1_m2[(p1_m2 > 0 & p1_m2 < 1) & (p2_m2 > 0 & p2_m2 < 1)];
+		p1m1s = p1_m1[(p1_m1 > 0 & p1_m1 < 1) & (p2_m1 > 0 & p2_m1 < 1)];
+		p1m3s = p1_m3[(p1_m3 > 0 & p1_m3 < 1) & (p2_m3 > 0 & p2_m3 < 1)];
+		p2m2s = p2_m2[(p2_m2 > 0 & p2_m2 < 1) & (p1_m2 > 0 & p1_m2 < 1)];
+		p2m1s = p2_m1[(p2_m1 > 0 & p2_m1 < 1) & (p1_m1 > 0 & p1_m1 < 1)];
+		p2m3s = p2_m3[(p2_m3 > 0 & p2_m3 < 1) & (p1_m3 > 0 & p1_m3 < 1)];
+
+		sequence = seq(0, 0.5, by=0.01);
+		sNarr=array(1.1:50.1, c(1,50,1));
+		sSarr=array(1.1:50.1, c(1,50,1));
+		sNp1arr=array(1.1:50.1, c(1,50,1));
+		sSp1arr=array(1.1:50.1, c(1,50,1));
+		sNp2arr=array(1.1:50.1, c(1,50,1));
+		sSp2arr=array(1.1:50.1, c(1,50,1));
+		rNp1arr=array(1.1:50.1, c(1,50,1));
+		rSp1arr=array(1.1:50.1, c(1,50,1));
+		rNp2arr=array(1.1:50.1, c(1,50,1));
+		rSp2arr=array(1.1:50.1, c(1,50,1));
+		barr=array(1.1:50.1, c(1,50,1));
+		bp1arr=array(1.1:50.1, c(1,50,1));
+		bp2arr=array(1.1:50.1, c(1,50,1));
+		
+		for(i in 0:(size(sequence)-1)){
+			sNp1arr[0,i,0] = size(p1m2s[p1m2s>sequence[i] & p1m2s<=(sequence[i]+0.01) & (p1m2s>0) & (p2m2s>0)]);
+			sSp1arr[0,i,0] = size(p1m1s[p1m1s>sequence[i] & p1m1s<=(sequence[i]+0.01) & (p1m1s>0) & (p2m1s>0)]);
+			sNp2arr[0,i,0] = size(p2m2s[p2m2s>sequence[i] & p2m2s<=(sequence[i]+0.01) & (p1m2s>0) & (p2m2s>0)]);
+			sSp2arr[0,i,0] = size(p2m1s[p2m1s>sequence[i] & p2m1s<=(sequence[i]+0.01) & (p1m1s>0) & (p2m1s>0)]);
+			rNp1arr[0,i,0] = size(p1m2[p1m2>sequence[i] & p1m2<=(sequence[i]+0.01)]);
+			rSp1arr[0,i,0] = size(p1m1[p1m1>sequence[i] & p1m1<=(sequence[i]+0.01)]);
+			rNp2arr[0,i,0] = size(p2m2[p2m2>sequence[i] & p2m2<=(sequence[i]+0.01)]);
+			rSp2arr[0,i,0] = size(p2m1[p2m1>sequence[i] & p2m1<=(sequence[i]+0.01)]);
+			bp1arr[0,i,0] = size(p1m3s[p1m3s>sequence[i] & p1m3s<=(sequence[i]+0.01) & (p1m3s>0) & (p2m3s>0)]);
+			bp2arr[0,i,0] = size(p2m3s[p2m3s>sequence[i] & p2m3s<=(sequence[i]+0.01) & (p1m3s>0) & (p2m3s>0)]);
+			sNarr[0,i,0] = size(p1m2s[((p1m2s+p2m2s)/2>sequence[i]) & ((p1m2s+p2m2s)/2<=(sequence[i]+0.01)) & (p1m2s>0) & (p2m2s>0)]);
+			sSarr[0,i,0] = size(p1m1s[((p1m1s+p2m1s)/2>sequence[i]) & ((p1m1s+p2m1s)/2<=(sequence[i]+0.01)) & (p1m1s>0) & (p2m1s>0)]);
+			barr[0,i,0] = size(p1m3s[((p1m3s+p2m3s)/2>sequence[i]) & ((p1m3s+p2m3s)/2<=(sequence[i]+0.01)) & (p1m3s>0) & (p2m3s>0)]);
+			
+			}
+
+			
+		//Write out different polymorphism categories to different files.
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sN.txt", paste(c(sNarr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sS.txt", paste(c(sSarr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_b.txt", paste(c(barr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sN_p1.txt", paste(c(sNp1arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sS_p1.txt", paste(c(sSp1arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sN_p2.txt", paste(c(sNp2arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sS_p2.txt", paste(c(sSp2arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_sS.txt", paste(c(sSarr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_rN_p1.txt", paste(c(rNp1arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_rS_p1.txt", paste(c(rSp1arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_rN_p2.txt", paste(c(rNp2arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_rS_p2.txt", paste(c(rSp2arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_b_p1.txt", paste(c(bp1arr)), append=T);
+		writeFile(fn+"/"+model+"_"+Ncurr+"_"+sim.generation+"_b_p2.txt", paste(c(bp2arr)), append=T);
+
+		}
+	}
+
+s5 late() {
+//sim.outputFull();
+	sim.simulationFinished();
+	
+}
