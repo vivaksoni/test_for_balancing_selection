@@ -2,7 +2,7 @@
 
 #Updated on Nov 07th, 2021
 
-This is the list of files included for the manuscript titled "A new test of balancing selection and its application to data from humans" by Soni et al. (2022), which can be found here - https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.3001645#sec012 . Contact vsoni@sussex.ac.uk for questions.
+This is the list of files included for the manuscript titled "A new test of balancing selection and its application to data from humans" by Soni et al. (2022), which can be found here - https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.3001645. Contact vsoni@sussex.ac.uk for questions.
 
 S1.xlsx // Supplementary file S1, containing results of the GO category analysis.
 
@@ -14,6 +14,6 @@ data_analysis.ipynb // Jupyter script to calculate Z for each of the superpopula
 
 get_z_table.py // Python script to calculate Z for MAF categories from simulation output.
 
-simple_demography.slim // SLiM script to run simulations under vicariance or dispersal scenarios.
+simple_demography.slim // SLiM script to run simulations under vicariance or dispersal scenarios. (Note parameterisations in this script are for humans. See Methods and Materials section of paper for Drosophila parameterisations).
 
-simple_demography.slim // SLiM script to run simulations under vicariance or dispersal scenarios, with a single balanced polymorphism inserted into the middle of the simulated region.
+simple_demography.slim // SLiM script to run simulations under vicariance or dispersal scenarios, with a single balanced polymorphism inserted into the middle of the simulated region. (Note parameterisations in this script are for humans. See Methods and Materials section of paper for Drosophila parameterisations).
