@@ -2,7 +2,7 @@
 
 #Updated on Nov 07th, 2021
 
-This is the list of files included for the manuscript titled "A new test of balancing selection and its application to data from humans" by Soni et al., which can be found here - https://www.biorxiv.org/content/10.1101/2021.02.08.430226v2 . Contact vsoni@sussex.ac.uk for questions.
+This is the list of files included for the manuscript titled "A new test of balancing selection and its application to data from humans" by Soni et al. (2022), which can be found here - https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.3001645#sec012 . Contact vsoni@sussex.ac.uk for questions.
 
 S1.xlsx // Supplementary file S1, containing results of the GO category analysis.
 
